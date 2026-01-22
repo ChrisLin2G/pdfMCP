@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 from fastmcp import FastMCP
-from pypdf import PdfReader
+import fitz  # PyMuPDF
 
 from mcp_server.settings import settings
 
@@ -73,7 +73,7 @@ def _run_ocrmypdf(input_path: Path, output_path: Path, force_ocr: bool = False) 
 def _extract_text_from_pdf(pdf_path: Path, start_page: Optional[int] = None, 
                           end_page: Optional[int] = None) -> tuple[bool, str]:
     """
-    Extract text from a PDF file.
+    Extract text from a PDF file with structure detection (headings, paragraphs, tables).
     
     Args:
         pdf_path: Path to PDF file
@@ -84,36 +84,142 @@ def _extract_text_from_pdf(pdf_path: Path, start_page: Optional[int] = None,
         Tuple of (success: bool, text_or_error: str)
     """
     try:
-        reader = PdfReader(str(pdf_path))
-        total_pages = len(reader.pages)
+        doc = fitz.open(str(pdf_path))
+        total_pages = len(doc)
         
         # Validate and adjust page numbers (convert to 0-indexed)
         first_page = 0 if start_page is None else max(0, start_page - 1)
         last_page = total_pages if end_page is None else min(total_pages, end_page)
         
         if first_page >= total_pages:
+            doc.close()
             return False, f"Start page {start_page} exceeds total pages ({total_pages})"
         
         if first_page >= last_page:
+            doc.close()
             return False, f"Start page must be less than or equal to end page"
         
-        # Extract text from specified pages
+        # Extract text with structure from specified pages
         text_parts = []
-        text_parts.append(f"PDF Text Extraction (Pages {first_page + 1}-{last_page} of {total_pages}):\n")
+        text_parts.append(f"PDF Text Extraction with Structure (Pages {first_page + 1}-{last_page} of {total_pages}):\n")
         text_parts.append("=" * 80 + "\n\n")
         
         for page_num in range(first_page, last_page):
-            page = reader.pages[page_num]
-            page_text = page.extract_text()
+            page = doc[page_num]
+            text_parts.append(f"--- Page {page_num + 1} ---\n\n")
             
-            if page_text.strip():
-                text_parts.append(f"--- Page {page_num + 1} ---\n")
-                text_parts.append(page_text)
-                text_parts.append("\n\n")
-            else:
-                text_parts.append(f"--- Page {page_num + 1} ---\n")
+            # Try to find tables using PyMuPDF
+            tables = page.find_tables()
+            
+            # Get text blocks with font information
+            blocks = page.get_text("dict")["blocks"]
+            
+            if not blocks and not tables:
                 text_parts.append("[No text content detected]\n\n")
+                continue
+            
+            # If tables are found, extract them
+            if tables:
+                for table_idx, table in enumerate(tables.tables):
+                    text_parts.append(f"**Table {table_idx + 1}:**\n\n")
+                    
+                    # Extract table data
+                    try:
+                        table_data = table.extract()
+                        
+                        if table_data and len(table_data) > 0:
+                            # Find column widths
+                            col_count = max(len(row) for row in table_data)
+                            col_widths = [max(len(str(row[i] if i < len(row) else "")) for row in table_data) for i in range(col_count)]
+                            col_widths = [max(w, 3) for w in col_widths]  # Minimum width of 3
+                            
+                            # Format as markdown table
+                            for row_idx, row in enumerate(table_data):
+                                # Pad row to column count
+                                padded_row = [str(row[i] if i < len(row) else "") for i in range(col_count)]
+                                
+                                # Format row
+                                row_text = "| " + " | ".join(cell.ljust(col_widths[i]) for i, cell in enumerate(padded_row)) + " |"
+                                text_parts.append(row_text + "\n")
+                                
+                                # Add separator after first row (header)
+                                if row_idx == 0:
+                                    separator = "|" + "|".join(["-" * (w + 2) for w in col_widths]) + "|"
+                                    text_parts.append(separator + "\n")
+                            
+                            text_parts.append("\n")
+                    except Exception as e:
+                        logger.warning(f"Failed to extract table {table_idx + 1}: {e}")
+                        text_parts.append(f"[Table extraction failed]\n\n")
+            
+            # Analyze font sizes to determine heading levels
+            font_sizes = []
+            for block in blocks:
+                if "lines" in block:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            font_sizes.append(span["size"])
+            
+            if not font_sizes and not tables:
+                text_parts.append("[No text content detected]\n\n")
+                continue
+            
+            # Calculate average font size for body text
+            avg_font_size = sum(font_sizes) / len(font_sizes) if font_sizes else 12
+            
+            # Process blocks (skip table regions if tables were detected)
+            for block in blocks:
+                if block["type"] == 0:  # Text block
+                    if "lines" not in block:
+                        continue
+                    
+                    # Skip blocks that are within table regions
+                    if tables:
+                        block_bbox = fitz.Rect(block["bbox"])
+                        skip_block = False
+                        for table in tables.tables:
+                            table_bbox = table.bbox
+                            if block_bbox.intersects(table_bbox):
+                                skip_block = True
+                                break
+                        if skip_block:
+                            continue
+                    
+                    block_text = []
+                    block_font_size = 0
+                    is_bold = False
+                    
+                    for line in block["lines"]:
+                        line_text = []
+                        for span in line["spans"]:
+                            text = span["text"].strip()
+                            if text:
+                                line_text.append(text)
+                                # Track font info for first span in block
+                                if not block_font_size:
+                                    block_font_size = span["size"]
+                                    is_bold = "bold" in span["font"].lower()
+                        
+                        if line_text:
+                            block_text.append(" ".join(line_text))
+                    
+                    if block_text:
+                        full_block_text = " ".join(block_text)
+                        
+                        # Determine if this is a heading based on font size
+                        if block_font_size > avg_font_size * 1.3:
+                            # Large heading
+                            text_parts.append(f"# {full_block_text}\n\n")
+                        elif block_font_size > avg_font_size * 1.1 or is_bold:
+                            # Medium heading or bold text
+                            text_parts.append(f"## {full_block_text}\n\n")
+                        else:
+                            # Regular paragraph
+                            text_parts.append(f"{full_block_text}\n\n")
+            
+            text_parts.append("\n")
         
+        doc.close()
         full_text = "".join(text_parts)
         
         if len(full_text) < 200:  # Very little text found
@@ -292,3 +398,4 @@ async def extract_text_without_ocr(
     Returns: Extracted text or error message
     """
     return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr=False)
+
