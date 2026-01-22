@@ -39,7 +39,7 @@ def _run_ocrmypdf(input_path: Path, output_path: Path, force_ocr: bool = False) 
         ]
         
         if force_ocr:
-            cmd.extend(["--force-ocr", "--redo-ocr"])
+            cmd.append("--force-ocr")
         elif settings.ocrmypdf_skip_text:
             cmd.append("--skip-text")
         
