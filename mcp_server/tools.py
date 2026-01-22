@@ -204,10 +204,16 @@ async def _extract_text_from_pdf_internal(
             success, message = _run_ocrmypdf(input_path, ocr_output)
             
             if not success:
-                return f"❌ OCR failed: {message}\nTry with run_ocr=False to extract existing text."
-            
-            logger.info(f"OCR completed: {message}")
-            pdf_to_extract = ocr_output
+                # Check if OCR failed because PDF already has text
+                if "already has text" in message or "PriorOcrFoundError" in message:
+                    logger.info(f"PDF already has text, skipping OCR and extracting directly")
+                    # Continue with original PDF without OCR
+                    pdf_to_extract = input_path
+                else:
+                    return f"❌ OCR failed: {message}\nTry with run_ocr=False to extract existing text."
+            else:
+                logger.info(f"OCR completed: {message}")
+                pdf_to_extract = ocr_output
         
         # Extract text from PDF
         logger.info(f"Extracting text from {pdf_to_extract}")
