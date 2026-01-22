@@ -19,13 +19,14 @@ logger = logging.getLogger(__name__)
 mcp = FastMCP("pdf-mcp")
 
 
-def _run_ocrmypdf(input_path: Path, output_path: Path) -> tuple[bool, str]:
+def _run_ocrmypdf(input_path: Path, output_path: Path, force_ocr: bool = False) -> tuple[bool, str]:
     """
     Run OCRmyPDF on a PDF file.
     
     Args:
         input_path: Path to input PDF
         output_path: Path to output OCR'd PDF
+        force_ocr: Force OCR even if PDF already has text
         
     Returns:
         Tuple of (success: bool, message: str)
@@ -37,7 +38,9 @@ def _run_ocrmypdf(input_path: Path, output_path: Path) -> tuple[bool, str]:
             "--output-type", "pdf",
         ]
         
-        if settings.ocrmypdf_skip_text:
+        if force_ocr:
+            cmd.extend(["--force-ocr", "--redo-ocr"])
+        elif settings.ocrmypdf_skip_text:
             cmd.append("--skip-text")
         
         cmd.extend([str(input_path), str(output_path)])
@@ -158,7 +161,8 @@ async def _extract_text_from_pdf_internal(
     pdf_path: str,
     start_page: Optional[int] = None,
     end_page: Optional[int] = None,
-    run_ocr: bool = True
+    run_ocr: bool = True,
+    force_ocr: bool = False
 ) -> str:
     """
     Extract text from a PDF file, optionally running OCR first.
@@ -168,6 +172,7 @@ async def _extract_text_from_pdf_internal(
         start_page: First page to extract (1-indexed, optional)
         end_page: Last page to extract (1-indexed, optional)
         run_ocr: Whether to run OCRmyPDF first (default: True)
+        force_ocr: Force OCR even if PDF already has text (default: False)
         
     Returns: Extracted text or error message
     
@@ -176,6 +181,7 @@ async def _extract_text_from_pdf_internal(
         - Extract pages 1-5: extract_text_from_pdf("/path/to/file.pdf", start_page=1, end_page=5)
         - Extract page 10 only: extract_text_from_pdf("/path/to/file.pdf", start_page=10, end_page=10)
         - Extract without OCR: extract_text_from_pdf("/path/to/file.pdf", run_ocr=False)
+        - Force OCR: extract_text_from_pdf("/path/to/file.pdf", force_ocr=True)
     """
     try:
         input_path = Path(pdf_path)
@@ -201,11 +207,11 @@ async def _extract_text_from_pdf_internal(
             temp_dir = settings.ensure_temp_dir()
             ocr_output = temp_dir / f"ocr_{input_path.name}"
             
-            success, message = _run_ocrmypdf(input_path, ocr_output)
+            success, message = _run_ocrmypdf(input_path, ocr_output, force_ocr)
             
             if not success:
-                # Check if OCR failed because PDF already has text
-                if "already has text" in message or "PriorOcrFoundError" in message:
+                # Check if OCR failed because PDF already has text (only if not forcing OCR)
+                if not force_ocr and ("already has text" in message or "PriorOcrFoundError" in message):
                     logger.info(f"PDF already has text, skipping OCR and extracting directly")
                     # Continue with original PDF without OCR
                     pdf_to_extract = input_path
@@ -241,7 +247,8 @@ async def extract_text_from_pdf(
     pdf_path: str,
     start_page: Optional[int] = None,
     end_page: Optional[int] = None,
-    run_ocr: bool = True
+    run_ocr: bool = True,
+    force_ocr: bool = False
 ) -> str:
     """
     Extract text from a PDF file, optionally running OCR first.
@@ -251,6 +258,7 @@ async def extract_text_from_pdf(
         start_page: First page to extract (1-indexed, optional)
         end_page: Last page to extract (1-indexed, optional)
         run_ocr: Whether to run OCRmyPDF first (default: True)
+        force_ocr: Force OCR even if PDF already has text (default: False)
         
     Returns: Extracted text or error message
     
@@ -259,8 +267,9 @@ async def extract_text_from_pdf(
         - Extract pages 1-5: extract_text_from_pdf("/path/to/file.pdf", start_page=1, end_page=5)
         - Extract page 10 only: extract_text_from_pdf("/path/to/file.pdf", start_page=10, end_page=10)
         - Extract without OCR: extract_text_from_pdf("/path/to/file.pdf", run_ocr=False)
+        - Force OCR even if text exists: extract_text_from_pdf("/path/to/file.pdf", force_ocr=True)
     """
-    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr)
+    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr, force_ocr)
 
 
 @mcp.tool
