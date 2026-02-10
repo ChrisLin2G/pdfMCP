@@ -352,50 +352,57 @@ async def _extract_text_from_pdf_internal(
 async def extract_text_from_pdf(
     pdf_path: str,
     start_page: Optional[int] = None,
-    end_page: Optional[int] = None,
-    run_ocr: bool = True,
-    force_ocr: bool = False
+    end_page: Optional[int] = None
 ) -> str:
     """
-    Extract text from a PDF file, optionally running OCR first.
+    Extract text from a PDF file without running OCR.
+    
+    This extracts existing searchable text from PDFs. Use this for PDFs that already
+    have text embedded (most modern PDFs, datasheets, manuals). This is fast.
     
     Args:
         pdf_path: Absolute path to the PDF file
         start_page: First page to extract (1-indexed, optional)
         end_page: Last page to extract (1-indexed, optional)
-        run_ocr: Whether to run OCRmyPDF first (default: True)
+        
+    Returns: Extracted text or error message
+    
+    Examples:
+        - Extract all pages: extract_text_from_pdf("/path/to/file.pdf")
+        - Extract pages 1-5: extract_text_from_pdf("/path/to/file.pdf", start_page=1, end_page=5)
+        - Extract page 10 only: extract_text_from_pdf("/path/to/file.pdf", start_page=10, end_page=10)
+    """
+    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr=False)
+
+
+@mcp.tool
+async def extract_text_with_ocr(
+    pdf_path: str,
+    start_page: Optional[int] = None,
+    end_page: Optional[int] = None,
+    force_ocr: bool = False
+) -> str:
+    """
+    Extract text from a PDF file with OCR processing.
+    
+    This runs OCRmyPDF first to add/improve text recognition. Use this for:
+    - Scanned documents without text
+    - PDFs with poor quality or incorrect text
+    - When you want to force re-OCR with modern recognition
+    
+    This is slower than extract_text_from_pdf but handles image-based PDFs.
+    
+    Args:
+        pdf_path: Absolute path to the PDF file
+        start_page: First page to extract (1-indexed, optional)
+        end_page: Last page to extract (1-indexed, optional)
         force_ocr: Force OCR even if PDF already has text (default: False)
         
     Returns: Extracted text or error message
     
     Examples:
-        - Extract all pages with OCR: extract_text_from_pdf("/path/to/file.pdf")
-        - Extract pages 1-5: extract_text_from_pdf("/path/to/file.pdf", start_page=1, end_page=5)
-        - Extract page 10 only: extract_text_from_pdf("/path/to/file.pdf", start_page=10, end_page=10)
-        - Extract without OCR: extract_text_from_pdf("/path/to/file.pdf", run_ocr=False)
-        - Force OCR even if text exists: extract_text_from_pdf("/path/to/file.pdf", force_ocr=True)
+        - OCR and extract: extract_text_with_ocr("/path/to/scanned.pdf")
+        - Force re-OCR: extract_text_with_ocr("/path/to/file.pdf", force_ocr=True)
     """
-    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr, force_ocr)
-
-
-@mcp.tool
-async def extract_text_without_ocr(
-    pdf_path: str,
-    start_page: Optional[int] = None,
-    end_page: Optional[int] = None
-) -> str:
-    """
-    Extract text from a PDF file without running OCR (for PDFs that already have text).
-    
-    This is a convenience tool that calls extract_text_from_pdf with run_ocr=False.
-    Use this when you know the PDF already contains searchable text.
-    
-    Args:
-        pdf_path: Absolute path to the PDF file
-        start_page: First page to extract (1-indexed, optional)
-        end_page: Last page to extract (1-indexed, optional)
-        
-    Returns: Extracted text or error message
-    """
-    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr=False)
+    return await _extract_text_from_pdf_internal(pdf_path, start_page, end_page, run_ocr=True, force_ocr=force_ocr)
 
